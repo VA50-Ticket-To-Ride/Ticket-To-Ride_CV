@@ -1,2 +1,8 @@
+# Python related directories
+__pycache__/
+
 # vscode related directories
 .vscode
+
+# Ignore folder
+ignore/
