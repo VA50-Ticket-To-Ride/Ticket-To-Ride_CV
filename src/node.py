@@ -101,5 +101,7 @@ class Node:
         dist = math.dist(self.center, point)
         return dist <= self.collision_radius
 
-    def draw(self, img):
-        cv.circle(img, self.center, self.collision_radius, (0,0,255), 2)
+    def draw(self, img, radius=None):
+        if radius is None:
+            radius = self.collision_radius
+        cv.circle(img, self.center, radius, (0,0,255), 2)

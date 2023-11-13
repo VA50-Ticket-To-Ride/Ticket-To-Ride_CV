@@ -22,16 +22,46 @@ class BoardFeatureDetector:
         # Define treshold HSV values
         color_treshs = {}
 
-        blue_lower_gimp = (195, 50, 65)
-        blue_upper_gimp = (215, 100, 100)
-        color_treshs["blue"] = (BoardFeatureDetector.hsv_gimp_to_cv(blue_lower_gimp), 
-            BoardFeatureDetector.hsv_gimp_to_cv(blue_upper_gimp))
-
-        # WIP
         orange_lower_gimp = (25, 50, 65)
         orange_upper_gimp = (40, 100, 100)
         color_treshs["orange"] = (BoardFeatureDetector.hsv_gimp_to_cv(orange_lower_gimp), 
             BoardFeatureDetector.hsv_gimp_to_cv(orange_upper_gimp))
+        
+        blue_lower_gimp = (195, 50, 65)
+        blue_upper_gimp = (215, 100, 100)
+        color_treshs["blue"] = (BoardFeatureDetector.hsv_gimp_to_cv(blue_lower_gimp), 
+            BoardFeatureDetector.hsv_gimp_to_cv(blue_upper_gimp))
+        
+        green_lower_gimp = (65, 50, 50)
+        green_upper_gimp = (90, 100, 100)
+        color_treshs["green"] = (BoardFeatureDetector.hsv_gimp_to_cv(green_lower_gimp), 
+            BoardFeatureDetector.hsv_gimp_to_cv(green_upper_gimp))
+        
+        red_lower_gimp = (355, 45, 50)
+        red_upper_gimp = (15, 100, 100)
+        color_treshs["red"] = (BoardFeatureDetector.hsv_gimp_to_cv(red_lower_gimp), 
+            BoardFeatureDetector.hsv_gimp_to_cv(red_upper_gimp))
+        
+        yellow_lower_gimp = (40, 40, 65)
+        yellow_upper_gimp = (60, 100, 100)
+        color_treshs["yellow"] = (BoardFeatureDetector.hsv_gimp_to_cv(yellow_lower_gimp), 
+            BoardFeatureDetector.hsv_gimp_to_cv(yellow_upper_gimp))
+        
+        purple_lower_gimp = (280, 10, 40)
+        purple_upper_gimp = (310, 50, 100)
+        color_treshs["purple"] = (BoardFeatureDetector.hsv_gimp_to_cv(purple_lower_gimp), 
+            BoardFeatureDetector.hsv_gimp_to_cv(purple_upper_gimp))
+        
+        black_lower_gimp = (0, 0, 0)
+        black_upper_gimp = (360, 30, 60)
+        color_treshs["black"] = (BoardFeatureDetector.hsv_gimp_to_cv(black_lower_gimp), 
+            BoardFeatureDetector.hsv_gimp_to_cv(black_upper_gimp))
+        
+        # WIP
+        white_lower_gimp = (0, 0, 70)
+        white_upper_gimp = (360, 10, 100)
+        color_treshs["white"] = (BoardFeatureDetector.hsv_gimp_to_cv(white_lower_gimp), 
+            BoardFeatureDetector.hsv_gimp_to_cv(white_upper_gimp))
 
         # WIP
         gray_lower_gimp = (0, 0, 40)
@@ -42,16 +72,41 @@ class BoardFeatureDetector:
         # ELEMENT DETECTION
         cells = {}
 
-        # BLUE
-        board_mask = BoardFeatureDetector.treshold_color_simple(board_hsv, color_treshs["blue"][0], color_treshs["blue"][1])
-        # Detect cells
-        cells["blue"] = BoardFeatureDetector.detect_cells(board_mask, "blue")
-        
         # ORANGE
         board_mask = BoardFeatureDetector.treshold_color_simple(board_hsv, color_treshs["orange"][0], color_treshs["orange"][1])
         # Detect nodes and cells
         nodes = BoardFeatureDetector.detect_nodes(board_mask)
         cells["orange"] = BoardFeatureDetector.detect_cells(board_mask, "orange")
+        
+        # BLUE
+        board_mask = BoardFeatureDetector.treshold_color_simple(board_hsv, color_treshs["blue"][0], color_treshs["blue"][1])
+        # Detect cells
+        cells["blue"] = BoardFeatureDetector.detect_cells(board_mask, "blue")
+        
+        # GREEN
+        board_mask = BoardFeatureDetector.treshold_color_simple(board_hsv, color_treshs["green"][0], color_treshs["green"][1])
+        # Detect cells
+        cells["green"] = BoardFeatureDetector.detect_cells(board_mask, "green")
+        
+        # RED
+        board_mask = BoardFeatureDetector.treshold_color_simple(board_hsv, color_treshs["red"][0], color_treshs["red"][1])
+        # Detect cells
+        cells["red"] = BoardFeatureDetector.detect_cells(board_mask, "red")
+
+        # YELLOW
+        board_mask = BoardFeatureDetector.treshold_color_simple(board_hsv, color_treshs["yellow"][0], color_treshs["yellow"][1])
+        # Detect cells
+        cells["yellow"] = BoardFeatureDetector.detect_cells(board_mask, "yellow")
+        
+        # PURPLE
+        board_mask = BoardFeatureDetector.treshold_color_simple(board_hsv, color_treshs["purple"][0], color_treshs["purple"][1])
+        # Detect cells
+        cells["purple"] = BoardFeatureDetector.detect_cells(board_mask, "purple")
+
+        # # BLACK
+        # board_mask = BoardFeatureDetector.treshold_color_simple(board_hsv, color_treshs["black"][0], color_treshs["black"][1])
+        # # Detect cells
+        # cells["black"] = BoardFeatureDetector.detect_cells(board_mask, "black")
 
         # Remove cells mostly inside nodes
         for node in nodes:
@@ -73,7 +128,7 @@ class BoardFeatureDetector:
         # Build collision map
         for node in nodes:
             node.search_collisions(cells)
-            
+
         for cells_color in cells.values():
             for (i, cell) in enumerate(cells_color):
                 cell.search_collisions(cells_color[i+1:])
@@ -82,7 +137,8 @@ class BoardFeatureDetector:
         # Debug print
         if True:
             board_mask_bgr = cv.cvtColor(board_mask, cv.COLOR_GRAY2BGR)
-            board_mask_bgr = board
+            # board_mask_bgr = board
+            board_mask_bgr = np.zeros_like(board_mask_bgr)
             
             #"""
             #board_mask_bgr = cv.drawContours(board_mask_bgr, contours, -1, (0,255,0), 3)
@@ -115,7 +171,19 @@ class BoardFeatureDetector:
 
     def treshold_color_simple(img_hsv, hsv_lower, hsv_upper):
         # Threshold the HSV image to get only target color
-        img_mask = cv.inRange(img_hsv, hsv_lower, hsv_upper)
+
+        # Special case where the lower bound is less than 180 and upper is above 0 (red color) 
+        if hsv_lower[0] > hsv_upper[0]:
+            hsv_upper_a = (180, hsv_upper[1], hsv_upper[2])
+            hsv_lower_b = (0, hsv_lower[1], hsv_lower[2])
+
+            img_mask_a = cv.inRange(img_hsv, hsv_lower, hsv_upper_a)
+            img_mask_b = cv.inRange(img_hsv, hsv_lower_b, hsv_upper)
+            img_mask = cv.bitwise_or(img_mask_a, img_mask_b)
+
+        # Normal case
+        else:
+            img_mask = cv.inRange(img_hsv, hsv_lower, hsv_upper)
 
         """
         # Think upon doing it the same as the blob detection algorithm, with multiple tresholds and deltas (may help with gray)
@@ -177,32 +245,36 @@ class BoardFeatureDetector:
 
             # Only keep rectangles whose smallest side is between 25 and 50
             smallest_length = min(rect[1])
-            if smallest_length < 25 or smallest_length > 50:
+            if smallest_length < 25 or smallest_length > 55:
                 continue
-            
-            # Turn the rotated rectangle into coordinates
-            box = cv.boxPoints(rect)
             
             # If a rectangle has a longest side smaller than 100, it's either a half or a tunnel. Store it away
             longest_length = max(rect[1])
             if longest_length < 100:
-                remaining_rects.append((rect, box))
+                remaining_rects.append(rect)
                 continue
 
-            # Round values
-            box = np.intp(box)
-
-            # print(rect)
-            # BoardFeatureDetector.display_contours(img_mask, [box])
-
-            cell = Cell(box, rect[0], rect[1], color_name)
+            cell = Cell(rect, color_name)
             cells.append(cell)
+            
+            # print(rect)
+            # BoardFeatureDetector.display_contours(img_mask, [cell.box])
 
         # Parse remaining rectangles (too small to have been validated on first pass)
         # The goal is to find rectangle halves and fuse them together
         while len(remaining_rects) != 0:
             rect = remaining_rects[0]
-            box = np.intp(rect[1])
+            box = cv.boxPoints(rect)
+
+            # If this rect is mostly inside a previously validated cell, delete it
+            skip = False
+            for cell in cells:
+                if cell.is_box_mostly_inside(box):
+                    remaining_rects.pop(0)
+                    skip = True
+                    break
+            if skip:
+                continue
 
             # Skip all gap computing if there is a single rect left
             if len(remaining_rects) > 1:
@@ -212,7 +284,7 @@ class BoardFeatureDetector:
                 closest_rect_index = None
                 closest_dist = None
                 for i, other_rect in enumerate(remaining_rects[1:], 1):
-                    dist = np.linalg.norm((rect[0][0][0] - other_rect[0][0][0], rect[0][0][1] - other_rect[0][0][1]))
+                    dist = math.dist(rect[0], other_rect[0])
 
                     if (closest_dist is None) or (dist < closest_dist):
                         closest_rect = other_rect
@@ -220,37 +292,36 @@ class BoardFeatureDetector:
                         closest_dist = dist
 
                 # Get oriented lengths for both rectangles
-                oriented_length = BoardFeatureDetector.get_oriented_length(rect[0], closest_rect[0])
-                other_oriented_length = BoardFeatureDetector.get_oriented_length(closest_rect[0], rect[0])
+                oriented_length = BoardFeatureDetector.get_oriented_length(rect, closest_rect)
+                other_oriented_length = BoardFeatureDetector.get_oriented_length(closest_rect, rect)
 
                 # Get approximate gap size between the two rectangles by the difference between 
                 # the distances and the oriented lengths
                 gap = closest_dist - (oriented_length/2) - (other_oriented_length/2)
                 
-                other_box = np.intp(closest_rect[1])
                 
                 # Print gap and pair
+                # other_box = np.intp(cv.boxPoints(closest_rect))
                 # print(gap)
                 # BoardFeatureDetector.display_contours(img_mask, [box, other_box])
             
             # The gap is too big, consider this a rectangle by itself (probably a tunnel)
             if len(remaining_rects) == 1 or gap > 20:
-                new_rect = rect[0]
-                new_box = box
+                new_rect = rect
+                new_box = np.intp(box)
                 remaining_rects.pop(0)
 
             # Else, the gap is small enough, these are a single rectangle
             else:
                 # Find the smallest rectangle fitting both
+                other_box = cv.boxPoints(closest_rect)
                 new_rect = cv.minAreaRect(np.concatenate((box, other_box)))
-                new_box = cv.boxPoints(new_rect)
-                new_box = np.intp(new_box)
                 
                 # Remove the first element and the other's index
                 remaining_rects.pop(closest_rect_index)
                 remaining_rects.pop(0)
 
-            cell = Cell(new_box, new_rect[0], new_rect[1], color_name)
+            cell = Cell(new_rect, color_name)
             cells.append(cell)
 
         return cells

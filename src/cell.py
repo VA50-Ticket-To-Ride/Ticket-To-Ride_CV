@@ -1,11 +1,17 @@
 import numpy as np
 import cv2 as cv
 import bisect
+import copy
 
 class Cell:
-    def __init__(self, box, center, box_lengths, color_name, collision_extend_by=72):
-        self.box = box
-        self.center = (round(center[0]), round(center[1]))
+    def __init__(self, rect, color_name, collision_extend_by=72):
+        # Turn the rotated rectangle into coordinates
+        box = cv.boxPoints(rect)
+        # Round values
+        self.box = np.intp(box)
+        
+        # Rect is (center (x,y), (width, height), angle of rotation radians)
+        self.rect = (np.intp(np.array(rect[0])), np.array(rect[1]), (rect[2]*np.pi)/180)
         self.color_name = color_name
         # Link_a and Link_b. Inside each, links are sorted by closest collision point
         self.links = ([], [])
@@ -14,22 +20,21 @@ class Cell:
 
         # A. Compute line inside box
 
-        box_lengths = ((box_lengths[1], box_lengths[0]))
-        min_ln_i = np.argmin(box_lengths) # min length index
+        min_ln_i = np.argmin(self.lengths) # min length index
         max_ln_i = (min_ln_i + 1) % 2 # max length index
-        mid_point_a = ((box[0+min_ln_i][0] + box[1+min_ln_i][0]) // 2, (box[0+min_ln_i][1] + box[1+min_ln_i][1]) // 2)
-        mid_point_b = ((box[2+min_ln_i][0] + box[(3+min_ln_i) % 4][0]) // 2, (box[2+min_ln_i][1] + box[(3+min_ln_i) % 4][1]) // 2)
+        mid_point_a = ((box[1+min_ln_i][0] + box[2+min_ln_i][0]) // 2, (box[1+min_ln_i][1] + box[2+min_ln_i][1]) // 2)
+        mid_point_b = ((box[(3+min_ln_i) % 4][0] + box[0+min_ln_i][0]) // 2, (box[(3+min_ln_i) % 4][1] + box[0+min_ln_i][1]) // 2)
 
         # B. Extend line and split it
 
         a_extended = [0, 0]
-        a_extended[0] = mid_point_a[0] + ((mid_point_a[0] - mid_point_b[0]) / (box_lengths[max_ln_i])) * collision_extend_by
-        a_extended[1] = mid_point_a[1] + ((mid_point_a[1] - mid_point_b[1]) / (box_lengths[max_ln_i])) * collision_extend_by
+        a_extended[0] = mid_point_a[0] + ((mid_point_a[0] - mid_point_b[0]) / (self.lengths[max_ln_i])) * collision_extend_by
+        a_extended[1] = mid_point_a[1] + ((mid_point_a[1] - mid_point_b[1]) / (self.lengths[max_ln_i])) * collision_extend_by
         a_extended = np.intp(a_extended)
 
         b_extended = [0, 0]
-        b_extended[0] = mid_point_b[0] + ((mid_point_b[0] - mid_point_a[0]) / (box_lengths[max_ln_i])) * collision_extend_by
-        b_extended[1] = mid_point_b[1] + ((mid_point_b[1] - mid_point_a[1]) / (box_lengths[max_ln_i])) * collision_extend_by
+        b_extended[0] = mid_point_b[0] + ((mid_point_b[0] - mid_point_a[0]) / (self.lengths[max_ln_i])) * collision_extend_by
+        b_extended[1] = mid_point_b[1] + ((mid_point_b[1] - mid_point_a[1]) / (self.lengths[max_ln_i])) * collision_extend_by
         b_extended = np.intp(b_extended)
         
         self.line_a = (a_extended, self.center)
@@ -37,7 +42,7 @@ class Cell:
 
         # --------- Is this a tunnel? ---------
 
-        self.is_tunnel = (box_lengths[max_ln_i] < 100)
+        self.is_tunnel = (self.lengths[max_ln_i] < 100)
 
     def lines(self):
         yield (self.box[0], self.box[1])
@@ -47,16 +52,45 @@ class Cell:
         yield self.line_a
         yield self.line_b
 
+    def collides_with_point(self, point):
+        # Translate the point and rectangle to the origin
+        translated_point = point - self.center
+        rotated_point = np.dot(translated_point, np.array([[np.cos(self.angle), -np.sin(self.angle)], [np.sin(self.angle), np.cos(self.angle)]]))
+
+        half_size = self.lengths / 2
+
+        # Check if the rotated point is inside the rectangle
+        return np.abs(rotated_point[0]) <= half_size[0] and np.abs(rotated_point[1]) <= half_size[1]
+
     def collides_with_line(self, line):
+        """
+        Checks for line collisions (if the line is fully inside it doesn't count as a collision)
+        """
         collides = False
         intersection_pts = []
         for internal_line in self.lines():
-            line_collides, intersection_pt = Cell.test_collision(internal_line, line)
+            line_collides, intersection_pt = Cell.line_to_line_collision(internal_line, line)
             if line_collides:
                 collides = True
                 intersection_pts.append(intersection_pt)
             
         return (collides, intersection_pts)
+    
+    def is_box_mostly_inside(self, box):
+        # Create a grid of nine points from box
+        grid = list(box)
+        for i, point in enumerate(box):
+            next_point = box[(i+1) % 4]
+            grid.append(((point[0] + next_point[0]) / 2, (point[1] + next_point[1]) / 2))
+        grid.append(((box[0][0] + box[2][0]) / 2, (box[0][1] + box[2][1]) / 2))
+        
+        inside_count = 0
+        for point in grid:
+            if self.collides_with_point(point):
+                inside_count += 1
+        
+        # A box is counted mostly inside if it has at least 3 points inside
+        return inside_count >= 3
     
     def search_collisions(self, other_cells):
         # Two directions to test collisions for
@@ -90,18 +124,31 @@ class Cell:
         # Insert the new link while keeping the list sorted by closest collision first
         bisect.insort(self.links[link_side], (other_object, min_collision_dist), key=lambda x: x[1])
 
+    @property
+    def center(self):
+        return self.rect[0]
+    
+    @property
+    def lengths(self):
+        return self.rect[1]
+    
+    @property
+    def angle(self):
+        # The angle is in radians
+        return self.rect[2]
+    
     def draw(self, img):
-        colors = [(0, 0, 255), (0, 0, 255), (0, 0, 255), (0, 0, 255), (0, 255, 0), (255, 0, 0)]
-        for (i, (line_pt_1, line_pt_2)) in enumerate(self.lines()):
-            cv.line(img, line_pt_1, line_pt_2, colors[i], 2)
+        # colors = [(0, 0, 255), (0, 0, 255), (0, 0, 255), (0, 0, 255), (0, 255, 0), (255, 0, 0)]
+        # for (i, (line_pt_1, line_pt_2)) in enumerate(self.lines()):
+        #     cv.line(img, line_pt_1, line_pt_2, colors[i], 2)
+
+        # cv.putText(img, self.color_name, self.center, cv.FONT_HERSHEY_SIMPLEX, 1.6, (255, 127, 255), 4)
 
         for links_side in self.links:
             for link in links_side:
                 cv.line(img, self.center, link[0].center, (255, 127, 127), 3)
 
-        cv.putText(img, self.color_name, self.center, cv.FONT_HERSHEY_SIMPLEX, 1.6, (255, 127, 255), 4)
-
-    def test_collision(line1, line2):
+    def line_to_line_collision(line1, line2):
         x1 = line1[0][0]
         y1 = line1[0][1]
         x2 = line1[1][0]
