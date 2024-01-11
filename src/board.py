@@ -1,5 +1,7 @@
 from cell import *
 from node import *
+from train_track import *
+from city import *
 
 import os
 import math
@@ -7,7 +9,7 @@ import torch
 import torchvision # Import needed to load the scripted model
 from scipy.optimize import linear_sum_assignment
 
-class BoardFeatureDetector:
+class Board:
     """
     Docs dump:
     Contours detection
@@ -139,36 +141,35 @@ class BoardFeatureDetector:
                 cell.draw_links(debug_img_links)
             cv.imwrite('debug/9_objects_links.png', debug_img_links)
         
-        # Solve multiple connectivity issues
-        # Create cost array
-        costs = np.full((2*len(cells), 2*len(cells)), fill_value=1e10, dtype=np.float32)
-        problematic_indexes = []
-        for i, cell in enumerate(cells):
-            links_dicts = cell.get_links_dicts()
-            for side, links_dict in enumerate(links_dicts):
-                row_index = 2*i + side
-                if len(links_dict) > 1:
-                    problematic_indexes.append(row_index)
+        # Solve the links that have multiple options using a Hungarian algorithm
+        self.solve_multi_links(cells)
 
-                for col_index, dist in links_dict.items():
-                    costs[row_index, col_index] = dist
-
-        # Apply the Hungarian algorithm to minimize the total distance
-        row_ind, col_ind = linear_sum_assignment(costs)
-
-        # Remove links from the cell sides with several links using the above
-        for problematic_index in problematic_indexes:
-            cell_index = problematic_index // 2
-            cell_side = problematic_index % 2
-
-            best_link_index = col_ind[np.where(row_ind==problematic_index)[0][0]] // 2
-            cells[cell_index].keep_best_link(cell_side, best_link_index)
+        # Remove unidirectional links
+        for cell in cells:
+            cell.remove_unidirectional_links()
 
         if self.debug:
             debug_img_links_unique = np.zeros_like(board)
             for cell in cells:
                 cell.draw_links(debug_img_links_unique)
             cv.imwrite('debug/10_objects_links_unique.png', debug_img_links_unique)
+
+        # Build actual board graph structure
+        cities, train_tracks = Board.build(nodes[0])
+        self.cities = cities
+        self.train_tracks = train_tracks
+
+        if self.debug:
+            debug_img_features_black = np.zeros_like(board)
+            debug_img_features = board.copy()
+            for city in cities:
+                city.draw(debug_img_features_black)
+                city.draw(debug_img_features)
+            for train_track in train_tracks:
+                train_track.draw(debug_img_features_black)
+                train_track.draw(debug_img_features)
+            cv.imwrite('debug/11_board_features_black.png', debug_img_features_black)
+            cv.imwrite('debug/12_board_features.png', debug_img_features)
     
     def run_inference(self, img, box_conf_tresh, mask_conf_tresh):
         # Small utility function to convert a confidence tensor mask to a binary numpy one
@@ -196,18 +197,18 @@ class BoardFeatureDetector:
         }])
         
         # Load model
-        model = torch.jit.load("resources/rect_detector_v2.ts")
+        # model = torch.jit.load("resources/rect_detector_v2.ts")
         
         # Run inference
-        outputs = model(inputs)
+        # outputs = model(inputs)
         
         # import pickle
         # with open('ignore/saved_dictionary.pkl', 'wb') as f:
         #     pickle.dump(outputs[0], f)
 
-        # import pickle
-        # with open('ignore/saved_dictionary.pkl', 'rb') as f:
-        #     outputs = [pickle.load(f)]
+        import pickle
+        with open('ignore/saved_dictionary.pkl', 'rb') as f:
+            outputs = [pickle.load(f)]
 
         # Extract scores to treshold other data
         scores = outputs[0]["scores"].detach().numpy()
@@ -237,3 +238,90 @@ class BoardFeatureDetector:
             cv.imwrite('debug/1_inference_resized.png', img_resized)
 
         return pred_classes, pred_boxes, pred_masks
+
+    def solve_multi_links(self, cells):
+        # Create cost array
+        costs = np.full((2*len(cells), 2*len(cells)), fill_value=1e10, dtype=np.float32)
+        problematic_indexes = []
+        for i, cell in enumerate(cells):
+            links_dicts = cell.get_links_dicts()
+            for side, links_dict in enumerate(links_dicts):
+                row_index = 2*i + side
+                if len(links_dict) > 1:
+                    problematic_indexes.append(row_index)
+
+                for col_index, dist in links_dict.items():
+                    costs[row_index, col_index] = dist
+
+        # Apply the Hungarian algorithm to minimize the total distance
+        row_ind, col_ind = linear_sum_assignment(costs)
+
+        # Remove links from the cell sides with several links using the above
+        for problematic_index in problematic_indexes:
+            cell_index = problematic_index // 2
+            cell_side = problematic_index % 2
+
+            best_link_index = col_ind[np.where(row_ind==problematic_index)[0][0]] // 2
+            cells[cell_index].keep_best_link(cell_side, best_link_index)
+
+    def build(start_node):
+        # Create starting city
+        start_city = City(start_node)
+        obj_to_feature_map = {start_node: start_city}
+        cities = [start_city]
+        train_tracks = []
+
+        # Walk board until everything has been built
+        visited_objects = []
+        walk_queue = [start_node]
+        while len(walk_queue) > 0:
+            # Get current object and its links
+            cur_obj = walk_queue.pop(0)
+            cur_links = cur_obj.links_plain
+            cur_feature = obj_to_feature_map[cur_obj]
+
+            visited_objects.append(cur_obj)
+
+            # Iterate over links
+            for other_obj in cur_links:
+                if other_obj in visited_objects or other_obj in walk_queue:
+                    if (isinstance(cur_obj, Node) and isinstance(other_obj, Cell)
+                    or isinstance(cur_obj, Cell) and isinstance(other_obj, Node)): 
+                        other_feature = obj_to_feature_map[other_obj]
+                        if cur_feature not in other_feature.links:
+                            other_feature.add_link(cur_feature)
+                            cur_feature.add_link(other_feature)
+                    continue
+
+                if isinstance(other_obj, Cell):
+                    # City -> Track
+                    if isinstance(cur_obj, Node):
+                        new_train_track = TrainTrack(other_obj)
+                        train_tracks.append(new_train_track)
+                        new_train_track.add_link(cur_feature)
+                        cur_feature.add_link(new_train_track)
+                        obj_to_feature_map[other_obj] = new_train_track
+                    # Track -> Track
+                    else:
+                        cur_feature.add_cell(other_obj)
+                        obj_to_feature_map[other_obj] = cur_feature
+
+                    # Insert cell in front to avoid creating two train tracks for the same cells
+                    walk_queue.insert(0, other_obj)
+                else:
+                    
+                    # Track -> City
+                    if isinstance(cur_obj, Cell):
+                        new_city = City(other_obj)
+                        cities.append(new_city)
+                        new_city.add_link(cur_feature)
+                        cur_feature.add_link(new_city)
+                        obj_to_feature_map[other_obj] = new_city
+                    else:
+                        raise Exception("No city should be directly connected to another city")
+
+                    # Insert node at the back
+                    walk_queue.append(other_obj)
+
+        return cities, train_tracks
+    

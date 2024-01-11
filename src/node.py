@@ -95,3 +95,7 @@ class Node:
         if radius is None:
             radius = self.collision_radius
         cv.circle(img, self.center, radius, color, 2)
+
+    @property
+    def links_plain(self):
+        return self.links

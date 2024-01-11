@@ -148,7 +148,21 @@ class Cell:
                 links_dict[2*obj.index + obj_side] = dist
 
         return links_dicts
+    
+    def remove_unidirectional_links(self):
+        for links_side in self.links:
+            for i in reversed(range(len(links_side))):
+                link = links_side[i][0]
+                if isinstance(link, Cell) and not link.is_index_in_links(self.index):
+                    del links_side[i]
 
+    def is_index_in_links(self, other_index):
+        for links_side in self.links:
+            for link in links_side:
+                if isinstance(link[0], Cell) and link[0].index == other_index:
+                    return True
+        return False
+    
     @property
     def center(self):
         return self.rect[0]
@@ -161,6 +175,15 @@ class Cell:
     def angle(self):
         # The angle is in radians
         return self.rect[2]
+    
+    @property
+    def links_plain(self):
+        links_plain = []
+        for links_side in self.links:
+            for link in links_side:
+                links_plain.append(link[0])
+
+        return links_plain
 
     def draw(self, img):
         for (i, (line_pt_1, line_pt_2)) in enumerate(self.lines()):
