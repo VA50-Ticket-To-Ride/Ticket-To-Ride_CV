@@ -1,0 +1,17 @@
+Yolov5-obb:
+../python-venv/bin/python train.py --weights yolov5n.pt --data 'dataset/dataset_first_test.yaml' --epochs 50 --batch-size 1 --img 1568 --device cpu
+
+Detectron2 visualisation:
+python detectron2/src/detectron2-0.6/tools/visualize_data.py --config datasets/dataset_first_test.yaml --source dataloader --output-dir dir/ --show
+python detectron2/src/detectron2-0.6/tools/visualize_data.py --config datasets/dataset_boards.yaml --source dataloader --output-dir dir/ --show
+
+Detectron2 training:
+python detectron2/src/detectron2-0.6/tools/plain_train_net.py --config datasets/dataset_first_test.yaml
+python detectron2/src/detectron2-0.6/tools/plain_train_net.py --config datasets/dataset_boards.yaml
+
+Visualize COCO json:
+python detectron2/src/detectron2-0.6/tools/visualize_json_results.py --input output/inference/my_dataset/coco_instances_results.json --output ./visualize --conf-threshold 0.10
+python detectron2/src/detectron2-0.6/tools/visualize_json_results.py --input output/inference/inference_dataset/coco_instances_results.json --dataset inference_dataset --output ./visualize --conf-threshold 0.10
+
+Export model:
+python detectron2/src/detectron2-0.6/tools/deploy/export_model.py --config-file rect_detector_v2_config.yaml --output ./output --export-method scripting --format torchscript MODEL.WEIGHTS /mnt/Hdd_ntfs/Documents/GitHub/Ticket-To-Ride_CV/ignore/rect_detector_v2.pth
