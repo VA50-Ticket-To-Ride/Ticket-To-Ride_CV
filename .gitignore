@@ -4,5 +4,9 @@ __pycache__/
 # vscode related directories
 .vscode
 
+# Mask-rcnn model file is too large for github
+resources/rect_detector_v2.ts
+
 # Ignore folder
 ignore/
+debug/

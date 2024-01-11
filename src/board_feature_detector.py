@@ -1,7 +1,11 @@
 from cell import *
 from node import *
 
+import os
 import math
+import torch
+import torchvision # Import needed to load the scripted model
+from scipy.optimize import linear_sum_assignment
 
 class BoardFeatureDetector:
     """
@@ -14,412 +18,222 @@ class BoardFeatureDetector:
     Collision
     https://stackoverflow.com/questions/56100547/how-do-i-check-collision-between-a-line-and-a-rect-in-pygame
     """
-    def __init__(self, board):
-        # Convert BGR to HSV
-        # https://stackoverflow.com/questions/53977777/how-can-i-only-keep-text-with-specific-color-from-image-via-opencv-and-python
-        board_hsv = cv.cvtColor(board, cv.COLOR_BGR2HSV)
+    def __init__(self, board, debug=False):
+        self.debug = debug
 
-        # Define treshold HSV values
-        color_treshs = {}
+        # Use a deep learning model to detect train tracks and cities 
+        pred_classes, pred_boxes, pred_masks = self.run_inference(board, box_conf_tresh=0.5, mask_conf_tresh=0.5)
 
-        orange_lower_gimp = (25, 50, 65)
-        orange_upper_gimp = (40, 100, 100)
-        color_treshs["orange"] = (BoardFeatureDetector.hsv_gimp_to_cv(orange_lower_gimp), 
-            BoardFeatureDetector.hsv_gimp_to_cv(orange_upper_gimp))
-        
-        blue_lower_gimp = (195, 50, 65)
-        blue_upper_gimp = (215, 100, 100)
-        color_treshs["blue"] = (BoardFeatureDetector.hsv_gimp_to_cv(blue_lower_gimp), 
-            BoardFeatureDetector.hsv_gimp_to_cv(blue_upper_gimp))
-        
-        green_lower_gimp = (65, 50, 50)
-        green_upper_gimp = (90, 100, 100)
-        color_treshs["green"] = (BoardFeatureDetector.hsv_gimp_to_cv(green_lower_gimp), 
-            BoardFeatureDetector.hsv_gimp_to_cv(green_upper_gimp))
-        
-        red_lower_gimp = (355, 45, 50)
-        red_upper_gimp = (15, 100, 100)
-        color_treshs["red"] = (BoardFeatureDetector.hsv_gimp_to_cv(red_lower_gimp), 
-            BoardFeatureDetector.hsv_gimp_to_cv(red_upper_gimp))
-        
-        yellow_lower_gimp = (40, 40, 65)
-        yellow_upper_gimp = (60, 100, 100)
-        color_treshs["yellow"] = (BoardFeatureDetector.hsv_gimp_to_cv(yellow_lower_gimp), 
-            BoardFeatureDetector.hsv_gimp_to_cv(yellow_upper_gimp))
-        
-        purple_lower_gimp = (280, 10, 40)
-        purple_upper_gimp = (310, 50, 100)
-        color_treshs["purple"] = (BoardFeatureDetector.hsv_gimp_to_cv(purple_lower_gimp), 
-            BoardFeatureDetector.hsv_gimp_to_cv(purple_upper_gimp))
-        
-        black_lower_gimp = (0, 0, 0)
-        black_upper_gimp = (360, 30, 60)
-        color_treshs["black"] = (BoardFeatureDetector.hsv_gimp_to_cv(black_lower_gimp), 
-            BoardFeatureDetector.hsv_gimp_to_cv(black_upper_gimp))
-        
-        # WIP
-        white_lower_gimp = (0, 0, 70)
-        white_upper_gimp = (360, 10, 100)
-        color_treshs["white"] = (BoardFeatureDetector.hsv_gimp_to_cv(white_lower_gimp), 
-            BoardFeatureDetector.hsv_gimp_to_cv(white_upper_gimp))
+        # Get number of objects
+        nb_obj = len(pred_classes)
 
-        # WIP
-        gray_lower_gimp = (0, 0, 40)
-        gray_upper_gimp = (179, 5.5, 65)
-        color_treshs["gray"] = (BoardFeatureDetector.hsv_gimp_to_cv(gray_lower_gimp), 
-            BoardFeatureDetector.hsv_gimp_to_cv(gray_upper_gimp))
+        if self.debug:
+            debug_img_boxes = board.copy()
+            debug_img_masks = board.copy()
+            debug_img_masks_eroded = board.copy()
+            debug_img_rboxes = board.copy()
+            debug_img_hitboxes = board.copy()
+            debug_img_hitboxes_black = np.zeros_like(board)
+            debug_img_indexes = debug_img_hitboxes_black.copy()
         
-        # ELEMENT DETECTION
-        cells = {}
+        # Process inference data to create nodes (cities) and cells (train tracks)
+        nodes = []
+        cells = []
+        for i in range(nb_obj):
+            # Cell
+            if pred_classes[i] == 0:
+                # Get some useful coordinates related to the upright bounding box
+                box_int = np.intp(np.round(pred_boxes[i]))
+                box_width = box_int[1][0] - box_int[0][0]
+                box_height = box_int[1][1] - box_int[0][1]
+                mask_x = box_int[0][0]
+                mask_y = box_int[0][1]
 
-        # ORANGE
-        board_mask = BoardFeatureDetector.treshold_color_simple(board_hsv, color_treshs["orange"][0], color_treshs["orange"][1])
-        # Detect nodes and cells
-        nodes = BoardFeatureDetector.detect_nodes(board_mask)
-        cells["orange"] = BoardFeatureDetector.detect_cells(board_mask, "orange")
-        
-        # BLUE
-        board_mask = BoardFeatureDetector.treshold_color_simple(board_hsv, color_treshs["blue"][0], color_treshs["blue"][1])
-        # Detect cells
-        cells["blue"] = BoardFeatureDetector.detect_cells(board_mask, "blue")
-        
-        # GREEN
-        board_mask = BoardFeatureDetector.treshold_color_simple(board_hsv, color_treshs["green"][0], color_treshs["green"][1])
-        # Detect cells
-        cells["green"] = BoardFeatureDetector.detect_cells(board_mask, "green")
-        
-        # RED
-        board_mask = BoardFeatureDetector.treshold_color_simple(board_hsv, color_treshs["red"][0], color_treshs["red"][1])
-        # Detect cells
-        cells["red"] = BoardFeatureDetector.detect_cells(board_mask, "red")
+                # Resize the square mask to the bounding box size
+                resized_mask = cv.resize(pred_masks[i], (box_width, box_height))
 
-        # YELLOW
-        board_mask = BoardFeatureDetector.treshold_color_simple(board_hsv, color_treshs["yellow"][0], color_treshs["yellow"][1])
-        # Detect cells
-        cells["yellow"] = BoardFeatureDetector.detect_cells(board_mask, "yellow")
-        
-        # PURPLE
-        board_mask = BoardFeatureDetector.treshold_color_simple(board_hsv, color_treshs["purple"][0], color_treshs["purple"][1])
-        # Detect cells
-        cells["purple"] = BoardFeatureDetector.detect_cells(board_mask, "purple")
+                # Erode mask
+                morph_kernel = np.ones((3, 3), np.uint8)
+                eroded_mask = cv.erode(resized_mask, morph_kernel, iterations=1)
 
-        # # BLACK
-        # board_mask = BoardFeatureDetector.treshold_color_simple(board_hsv, color_treshs["black"][0], color_treshs["black"][1])
-        # # Detect cells
-        # cells["black"] = BoardFeatureDetector.detect_cells(board_mask, "black")
+                # Find contours
+                contours, _ = cv.findContours(eroded_mask, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
 
-        # Remove cells mostly inside nodes
-        for node in nodes:
-            for cells_color in cells.values():
-                # See which cells need removing
-                indexes_to_remove = []
-                for i, cell in enumerate(cells_color):
-                    if node.is_cell_mostly_inside(cell):
-                        indexes_to_remove.append(i)
+                # Keep contour with the biggest area
+                contour = max(contours, key=cv.contourArea)
 
-                # Remove duplicate indexes
-                indexes_to_remove = set(indexes_to_remove)
+                # Find smallest fitting rotated rectangle and its corresponding rotated bounding box
+                (center_x, center_y), (width, height), angle = cv.minAreaRect(contour)
+                rect = ((center_x+mask_x, center_y+mask_y), (width, height), angle)
+                rbox = np.intp(cv.boxPoints(rect))
 
-                # Actually remove cells
-                for index in sorted(indexes_to_remove, reverse=True):
-                    del cells_color[index]
+                # Create cell object and add it to the list
+                cell = Cell(len(cells), rect, rbox)
+                cells.append(cell)
 
-        #"""
+                if debug:
+                    # debug_img_boxes
+                    cv.rectangle(debug_img_boxes, pt1=box_int[0], pt2=box_int[1], color=(255, 255, 127), thickness=2)
+                    # debug_img_masks
+                    img_slice = debug_img_masks[mask_y:mask_y + box_height, mask_x:mask_x + box_width]
+                    img_slice[np.where(resized_mask)] = [127, 127, 255]
+                    # debug_img_masks_eroded
+                    img_slice = debug_img_masks_eroded[mask_y:mask_y + box_height, mask_x:mask_x + box_width]
+                    img_slice[np.where(eroded_mask)] = [127, 127, 255]
+                    # debug_img_rboxes
+                    cv.drawContours(debug_img_rboxes, [rbox], 0, color=(255, 255, 127), thickness=2)
+                    # debug_img_hitboxes
+                    cell.draw_hitbox(debug_img_hitboxes)
+                    # debug_img_hitboxes_black
+                    cell.draw_hitbox(debug_img_hitboxes_black)
+                    # debug_img_indexes
+                    cell.draw(debug_img_indexes)
+
+            # Node
+            elif pred_classes[i] == 1:
+                # Find center of bounding box
+                box = pred_boxes[i]
+                box_center_x = round((box[0][0] + box[1][0]) / 2)
+                box_center_y = round((box[0][1] + box[1][1]) / 2)
+
+                # Create node object and add it to the list
+                node = Node((box_center_x, box_center_y))
+                nodes.append(node)
+
+                if debug:
+                    box_int = np.intp(np.round(box))
+                    # debug_img_boxes
+                    cv.rectangle(debug_img_boxes, pt1=box_int[0], pt2=box_int[1], color=(127, 255, 127), thickness=2)
+                    # debug_img_rboxes
+                    node.draw_hitbox(debug_img_rboxes, radius=12)
+                    # debug_img_hitboxes
+                    node.draw_hitbox(debug_img_hitboxes, color=(255, 255, 127))
+                    # debug_img_hitboxes_black
+                    node.draw_hitbox(debug_img_hitboxes_black, color=(255, 255, 127))
+
+            # Invalid class ID
+            else:
+                raise Exception("Invalid inference class ID: " + str(pred_classes[i]))
+            
+        if self.debug:
+            cv.imwrite('debug/2_inference_bounding_boxes.png', debug_img_boxes)
+            cv.imwrite('debug/3_inference_masks.png', debug_img_masks)
+            cv.imwrite('debug/4_inference_masks_eroded.png', debug_img_masks_eroded)
+            cv.imwrite('debug/5_inference_rotated_bboxes.png', debug_img_rboxes)
+            cv.imwrite('debug/6_objects_hitboxes.png', debug_img_hitboxes)
+            cv.imwrite('debug/7_objects_hitboxes_black.png', debug_img_hitboxes_black)
+            cv.imwrite('debug/8_objects_indexes.png', debug_img_indexes)
+
         # Build collision map
+        # node-cell
         for node in nodes:
             node.search_collisions(cells)
 
-        for cells_color in cells.values():
-            for (i, cell) in enumerate(cells_color):
-                cell.search_collisions(cells_color[i+1:])
-        #"""
+        # cell-cell
+        for i, cell in enumerate(cells):
+            cell.search_collisions(cells[i+1:])
 
-        # Debug print
-        if True:
-            board_mask_bgr = cv.cvtColor(board_mask, cv.COLOR_GRAY2BGR)
-            # board_mask_bgr = board
-            board_mask_bgr = np.zeros_like(board_mask_bgr)
-            
-            #"""
-            #board_mask_bgr = cv.drawContours(board_mask_bgr, contours, -1, (0,255,0), 3)
-            for node in nodes:
-                node.draw(board_mask_bgr)
-                #circle_area = (math.pi*radius)*(math.pi*radius)
-                #cv.putText(board_mask_bgr, str(radius), center, cv.FONT_HERSHEY_SIMPLEX, 1.6, (255, 128, 255), 4)
-            #"""
-
-            #"""
-            for cells_color in cells.values():
-                for cell in cells_color:
-                    cell.draw(board_mask_bgr)
-                    #cv.drawContours(board_mask_bgr, [cell.box], -1, (0,255,0), 3)
-
-                    # print("ID: " + str(cell.id))
-                    # print("Green: " + str(cell.links[0]))
-                    # print("Blue: " + str(cell.links[1]))
-                    # print()
-            #"""
-            
-            out = board_mask_bgr
-
-            cv.namedWindow('out', cv.WINDOW_NORMAL)
-            cv.imshow('out', out)
-
-            cv.resizeWindow('out', 1920, 1080)
-
-            cv.waitKey(0)
-
-    def treshold_color_simple(img_hsv, hsv_lower, hsv_upper):
-        # Threshold the HSV image to get only target color
-
-        # Special case where the lower bound is less than 180 and upper is above 0 (red color) 
-        if hsv_lower[0] > hsv_upper[0]:
-            hsv_upper_a = (180, hsv_upper[1], hsv_upper[2])
-            hsv_lower_b = (0, hsv_lower[1], hsv_lower[2])
-
-            img_mask_a = cv.inRange(img_hsv, hsv_lower, hsv_upper_a)
-            img_mask_b = cv.inRange(img_hsv, hsv_lower_b, hsv_upper)
-            img_mask = cv.bitwise_or(img_mask_a, img_mask_b)
-
-        # Normal case
-        else:
-            img_mask = cv.inRange(img_hsv, hsv_lower, hsv_upper)
-
-        """
-        # Think upon doing it the same as the blob detection algorithm, with multiple tresholds and deltas (may help with gray)
-        morph_kernel = np.ones((3, 3), np.uint8)
-        #board_mask_blue_morphed = cv.erode(board_mask_blue, morph_kernel, iterations = 1)
-        img_mask_morphed = cv.morphologyEx(img_mask, cv.MORPH_OPEN, morph_kernel)
-        img_mask_morphed = cv.dilate(img_mask_morphed, morph_kernel, iterations = 2)
-        """
-
-        # Think upon doing it the same as the blob detection algorithm, with multiple tresholds and deltas (may help with gray)
-        #morph_kernel = np.array(([0, 0, 1, 0, 0], [0, 1, 1, 1, 0], [1, 1, 1, 1, 1], [0, 1, 1, 1, 0], [0, 0, 1, 0, 0]), np.uint8)
-        morph_kernel = np.ones((5, 5), np.uint8)
-        #img_mask_morphed = cv.erode(img_mask, morph_kernel, iterations = 1)
-        img_mask_morphed = cv.morphologyEx(img_mask, cv.MORPH_OPEN, morph_kernel)
-        #img_mask_morphed = cv.dilate(img_mask_morphed, morph_kernel, iterations = 3)
-
-        # Bitwise-AND mask and original image
-        #board_blue = cv.bitwise_and(board, board, mask=board_mask)
-
-        return img_mask_morphed
-    
-    def get_oriented_length(rect, other_rect):
-        # Find the length of the rectangle most oriented towards the center of the other rectangle
-        # Rect are (center (x,y), (width, height), angle of rotation degrees)
-
-        # Calculate the vector from the center of the other rectangle to the center of the current rectangle
-        relative_vector = np.array(rect[0]) - np.array(other_rect[0])
-
-        # Calculate the angle between the vector and the x-axis
-        angle_to_x_axis = np.arctan2(relative_vector[1], relative_vector[0])
-
-        # Calculate the angle difference between the orientation of the rectangle and the angle to the other rectangle
-        angle_difference = np.abs(((rect[2]*np.pi)/180) - angle_to_x_axis)
-
-        # Ensure the angle difference is within the range [0, pi]
-        angle_difference = np.minimum(angle_difference, np.pi - angle_difference)
-
-        # Determine which side of the rectangle is most oriented towards the other rectangle
-        if angle_difference < np.pi / 4:
-            # Width is most oriented
-            return rect[1][0]
-        else:
-            # Height is most oriented
-            return rect[1][1]
-        
-    def detect_cells(img_mask, color_name):
-        # Keep external contours only
-        contours, _ = cv.findContours(img_mask, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
-
-        # BoardFeatureDetector.display_contours(img_mask, contours)
-        # BoardFeatureDetector.display_contours(img_mask, contours, one_by_one=True)
-
-        # Detect cells
-        cells = []
-        remaining_rects = []
-        for cnt in contours:
-            # Find the smallest rectangle fitting the contour
-            rect = cv.minAreaRect(cnt)
-
-            # Only keep rectangles whose smallest side is between 25 and 50
-            smallest_length = min(rect[1])
-            if smallest_length < 25 or smallest_length > 55:
-                continue
-            
-            # If a rectangle has a longest side smaller than 100, it's either a half or a tunnel. Store it away
-            longest_length = max(rect[1])
-            if longest_length < 100:
-                remaining_rects.append(rect)
-                continue
-
-            cell = Cell(rect, color_name)
-            cells.append(cell)
-            
-            # print(rect)
-            # BoardFeatureDetector.display_contours(img_mask, [cell.box])
-
-        # Parse remaining rectangles (too small to have been validated on first pass)
-        # The goal is to find rectangle halves and fuse them together
-        while len(remaining_rects) != 0:
-            rect = remaining_rects[0]
-            box = cv.boxPoints(rect)
-
-            # If this rect is mostly inside a previously validated cell, delete it
-            skip = False
+        if self.debug:
+            debug_img_links = np.zeros_like(board)
             for cell in cells:
-                if cell.is_box_mostly_inside(box):
-                    remaining_rects.pop(0)
-                    skip = True
-                    break
-            if skip:
-                continue
+                cell.draw_links(debug_img_links)
+            cv.imwrite('debug/9_objects_links.png', debug_img_links)
+        
+        # Solve multiple connectivity issues
+        # Create cost array
+        costs = np.full((2*len(cells), 2*len(cells)), fill_value=1e10, dtype=np.float32)
+        problematic_indexes = []
+        for i, cell in enumerate(cells):
+            links_dicts = cell.get_links_dicts()
+            for side, links_dict in enumerate(links_dicts):
+                row_index = 2*i + side
+                if len(links_dict) > 1:
+                    problematic_indexes.append(row_index)
 
-            # Skip all gap computing if there is a single rect left
-            if len(remaining_rects) > 1:
+                for col_index, dist in links_dict.items():
+                    costs[row_index, col_index] = dist
 
-                # Find closest rect
-                closest_rect = None
-                closest_rect_index = None
-                closest_dist = None
-                for i, other_rect in enumerate(remaining_rects[1:], 1):
-                    dist = math.dist(rect[0], other_rect[0])
+        # Apply the Hungarian algorithm to minimize the total distance
+        row_ind, col_ind = linear_sum_assignment(costs)
 
-                    if (closest_dist is None) or (dist < closest_dist):
-                        closest_rect = other_rect
-                        closest_rect_index = i
-                        closest_dist = dist
+        # Remove links from the cell sides with several links using the above
+        for problematic_index in problematic_indexes:
+            cell_index = problematic_index // 2
+            cell_side = problematic_index % 2
 
-                # Get oriented lengths for both rectangles
-                oriented_length = BoardFeatureDetector.get_oriented_length(rect, closest_rect)
-                other_oriented_length = BoardFeatureDetector.get_oriented_length(closest_rect, rect)
+            best_link_index = col_ind[np.where(row_ind==problematic_index)[0][0]] // 2
+            cells[cell_index].keep_best_link(cell_side, best_link_index)
 
-                # Get approximate gap size between the two rectangles by the difference between 
-                # the distances and the oriented lengths
-                gap = closest_dist - (oriented_length/2) - (other_oriented_length/2)
-                
-                
-                # Print gap and pair
-                # other_box = np.intp(cv.boxPoints(closest_rect))
-                # print(gap)
-                # BoardFeatureDetector.display_contours(img_mask, [box, other_box])
-            
-            # The gap is too big, consider this a rectangle by itself (probably a tunnel)
-            if len(remaining_rects) == 1 or gap > 20:
-                new_rect = rect
-                new_box = np.intp(box)
-                remaining_rects.pop(0)
-
-            # Else, the gap is small enough, these are a single rectangle
-            else:
-                # Find the smallest rectangle fitting both
-                other_box = cv.boxPoints(closest_rect)
-                new_rect = cv.minAreaRect(np.concatenate((box, other_box)))
-                
-                # Remove the first element and the other's index
-                remaining_rects.pop(closest_rect_index)
-                remaining_rects.pop(0)
-
-            cell = Cell(new_rect, color_name)
-            cells.append(cell)
-
-        return cells
+        if self.debug:
+            debug_img_links_unique = np.zeros_like(board)
+            for cell in cells:
+                cell.draw_links(debug_img_links_unique)
+            cv.imwrite('debug/10_objects_links_unique.png', debug_img_links_unique)
     
-    def detect_nodes(img_mask):
-        # Keep external contours only
-        contours, _ = cv.findContours(img_mask, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+    def run_inference(self, img, box_conf_tresh, mask_conf_tresh):
+        # Small utility function to convert a confidence tensor mask to a binary numpy one
+        def binarize_mask(mask, mask_conf_tresh):
+            # Binarize tensor according to treshold
+            binary_mask = (mask > mask_conf_tresh).float()
 
-        # Detect circles
-        circles = []
-        for cnt in contours:
-            # Find the smallest circle fitting the contour
-            (x,y), radius = cv.minEnclosingCircle(cnt)
+            # Convert the tensor to a NumPy array (0 = no pixel, 1 = pixel)
+            binary_mask_np = binary_mask.squeeze().numpy().astype(np.uint8)
 
-            # Discard circles not of fitting size
-            if radius < 8 or radius > 22:
-                continue
-            
-            # Discard circles where the ratio of contour area over circle area is too small
-            #area = cv.contourArea(cnt)
-
-            circles.append(((x,y), radius))
+            return binary_mask_np
         
-        # Group circles close to each other
+        # Resize input image. Note that the model was trained using PIL's resize (bilinear) which is slightly different
+        resize_factor = 800 / img.shape[0]
+        new_height = round(img.shape[1]*resize_factor)
+        interpolation = cv.INTER_AREA if resize_factor < 1 else cv.INTER_CUBIC
+        img_resized = cv.resize(img, (new_height, 800), interpolation=interpolation)
 
-        nb_groups = 0
-        groups = []
-        group_ids = [None]*len(circles)
-        for (i, circle) in enumerate(circles):
-            (x_a, y_a), radius_a = circle
-            
-            group_index = nb_groups
-            if group_ids[i] is None:
-                group_ids[i] = group_index
-                groups.append([])
-                nb_groups += 1
-            else:
-                group_index = group_ids[i]
+        # Convert it to tensor
+        img_tensor = torch.from_numpy(img_resized.transpose(2, 0, 1))
 
-            groups[group_index].append(circle)
-
-            for other_i, other_cell in enumerate(circles[i+1:], start=i+1):
-                (x_b, y_b), radius_b = other_cell
-                dist = math.sqrt((x_b - x_a)*(x_b - x_a) + (y_b - y_a)*(y_b - y_a))
-                if dist < 80:
-                    group_ids[other_i] = group_index
-
-        # Display single cell
-        # cell_mask = np.zeros_like(img_mask)
-        # cell_mask = cv.circle(cell_mask, (x,y), radius, (255, 255, 255), -1)
+        # Convert input to right format
+        inputs = tuple([{
+            "image": img_tensor,
+        }])
         
-        # Find center of mass of each group and create a nod out of it
-        nodes = [None] * len(groups)
-        for i, group in enumerate(groups):
-            new_x = group[0][0][0]
-            new_y = group[0][0][1]
-            new_radius = 80
-            
-            if len(group) > 1:
-                sum_x = 0
-                sum_y = 0
-                total_weights = 0
-                for (x,y),radius in group:
-                    sum_x += x * radius
-                    sum_y += y * radius
-                    total_weights += radius
-                new_x = sum_x / total_weights
-                new_y = sum_y / total_weights
-            
-            # Create node
-            nodes[i] = Node((round(new_x), round(new_y)), new_radius)
-
-        return nodes
-
-    def hsv_gimp_to_cv(hsv_gimp):
-        # OpenCV HSV range is [179, 255, 255] where gimp is [359, 100, 100]
-        hsv_cv = np.array([hsv_gimp[0]/2, (hsv_gimp[1]*255)/100, (hsv_gimp[2]*255)/100])
-        return hsv_cv
-    
-    def display_contours(img, contours, one_by_one=False):
-        img_bgr = cv.cvtColor(img, cv.COLOR_GRAY2BGR)
-        print(contours)
+        # Load model
+        model = torch.jit.load("resources/rect_detector_v2.ts")
         
-        if one_by_one:
-            for cnt in contours:
-                img_bgr_copy = np.copy(img_bgr)
-
-                cv.drawContours(img_bgr_copy, cnt, -1, (0,255,0), 3)
-
-                cv.namedWindow('out', cv.WINDOW_NORMAL)
-                cv.imshow('out', img_bgr_copy)
-                cv.resizeWindow('out', 1920, 1080)
-                cv.waitKey(0)
+        # Run inference
+        outputs = model(inputs)
         
-        else:
-            cv.drawContours(img_bgr, contours, -1, (0,255,0), 3)
-            
-            cv.namedWindow('out', cv.WINDOW_NORMAL)
-            cv.imshow('out', img_bgr)
-            cv.resizeWindow('out', 1920, 1080)
-            cv.waitKey(0)
+        # import pickle
+        # with open('ignore/saved_dictionary.pkl', 'wb') as f:
+        #     pickle.dump(outputs[0], f)
+
+        # import pickle
+        # with open('ignore/saved_dictionary.pkl', 'rb') as f:
+        #     outputs = [pickle.load(f)]
+
+        # Extract scores to treshold other data
+        scores = outputs[0]["scores"].detach().numpy()
+
+        # Extract predicted classes, boxes and masks
+        assert all(len(x) == 1 for x in outputs[0]["pred_masks"]) # Only one binary mask to describe each object
+        pred_classes = [x for score, x in zip(scores, outputs[0]["pred_classes"].detach().numpy()) if score >= box_conf_tresh]
+        pred_boxes = [x.detach().numpy().reshape(2, 2) for score, x in zip(scores, outputs[0]["pred_boxes"]) if score >= box_conf_tresh]
+        pred_masks = [binarize_mask(mask, mask_conf_tresh) for score, mask in zip(scores, outputs[0]["pred_masks"]) if score >= box_conf_tresh]
+        
+        # Get number of objects
+        nb_obj = len(pred_classes)
+
+        # Resize boxes to match original image size
+        resize_factor = np.divide(img.shape, img_resized.shape)
+        for i in range(nb_obj):
+            for j in range(2):
+                pred_boxes[i][j, 0] *= resize_factor[1]
+                pred_boxes[i][j, 1] *= resize_factor[0]
+
+        if self.debug:
+            print("Number of detections (all):" + str(len(scores)))
+            print("Number of detections (>" + str(round(box_conf_tresh*100)) + "%) :" + str(nb_obj))
+
+            os.makedirs("debug", exist_ok=True)
+            cv.imwrite('debug/0_board.png', img)
+            cv.imwrite('debug/1_inference_resized.png', img_resized)
+
+        return pred_classes, pred_boxes, pred_masks
